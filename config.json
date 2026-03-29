@@ -1,5 +1,8 @@
 {
-  "ports": [
-    "/dev/radio"
+  "volumes": [
+    {
+      "name": "/dev/radio",
+      "type": "folder"
+    }
   ]
 }
