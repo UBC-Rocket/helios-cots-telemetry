@@ -20,8 +20,10 @@ COPY pyproject.toml uv.lock ./
 COPY helios-python-sdk/ ./helios-python-sdk/
 RUN uv sync --frozen --no-install-project
 
-# Copy source and generate protos
-# COPY . .
+# Copy source
+COPY src/ ./src/
+
+# Generate protos
 # RUN mkdir -p generated && \
 #     find helios-protos -name "*.proto" | xargs protoc \
 #     --proto_path=helios-protos \
@@ -46,4 +48,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 5000
 
 # Use the venv's python directly for better performance/signals
-CMD ["python", "main.py", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["python", "src/main.py", "--host", "0.0.0.0", "--port", "5000"]
