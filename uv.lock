@@ -2,30 +2,30 @@ version = 1
 requires-python = ">=3.13"
 
 [[package]]
-name = "helios-python"
+name = "helios-cots-telemetry"
 version = "0.1.0"
-source = { editable = "helios-python" }
+source = { virtual = "." }
+dependencies = [
+    { name = "helios-python-sdk" },
+    { name = "protobuf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "helios-python-sdk", editable = "helios-python-sdk" },
+    { name = "protobuf", specifier = ">=7.34.0" },
+]
+
+[[package]]
+name = "helios-python-sdk"
+version = "0.1.0"
+source = { editable = "helios-python-sdk" }
 dependencies = [
     { name = "protobuf" },
 ]
 
 [package.metadata]
 requires-dist = [{ name = "protobuf", specifier = ">=7.34.0" }]
-
-[[package]]
-name = "helios-telemetry-cots-decoder"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "helios-python" },
-    { name = "protobuf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "helios-python", editable = "helios-python" },
-    { name = "protobuf", specifier = ">=7.34.0" },
-]
 
 [[package]]
 name = "protobuf"
