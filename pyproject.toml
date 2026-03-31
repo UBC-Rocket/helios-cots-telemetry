@@ -1,13 +1,13 @@
 [project]
-name = "helios-telemetry-cots-decoder"
+name = "helios-cots-telemetry"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "helios-python",
+    "helios-python-sdk",
     "protobuf>=7.34.0",
 ]
 
 [tool.uv.sources]
-helios-python = { path = "helios-python", editable = true }
+helios-python-sdk = { path = "helios-python-sdk", editable = true }
