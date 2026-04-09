@@ -1,5 +1,6 @@
 .venv/
 generated/
 .vscode/
+__pycache__/
 
 .python-version
