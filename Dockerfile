@@ -6,10 +6,10 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 # Install uv from prebuilt binary
 COPY --from=ghcr.io/astral-sh/uv:0.9.2 /uv /uvx /bin/
 
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#     protobuf-compiler \
-#     libprotobuf-dev \
-#     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    protobuf-compiler \
+    libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -24,10 +24,10 @@ RUN uv sync --frozen --no-install-project
 COPY src/ ./src/
 
 # Generate protos
-# RUN mkdir -p generated && \
-#     find helios-protos -name "*.proto" | xargs protoc \
-#     --proto_path=helios-protos \
-#     --python_out=generated
+RUN mkdir -p generated && \
+    find falcon-protos -name "*.proto" | xargs protoc \
+    --proto_path=falcon-protos \
+    --python_out=generated
 
 RUN uv sync --frozen
 
@@ -44,6 +44,10 @@ COPY --from=builder /app /app
 
 # Add the venv to the PATH so we don't always need 'uv run'
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Add default env vars for serial config
+ENV SERIAL_BAUD=115200
+ENV SERIAL_TIMEOUT=1.0
 
 EXPOSE 5000
 

@@ -1,7 +1,7 @@
 .PHONY: protos deps run submodule
 
 # Variables
-PROTO_SOURCE_DIR=helios-protos
+PROTO_SOURCE_DIR=falcon-protos
 PROTO_BUILD_DIR=src/generated
 
 # Find all .proto files in the proto directory and subdirectories
@@ -13,7 +13,7 @@ DOCKER_DISABLED=1
 export DOCKER_DISABLED
 
 MKDIR = mkdir -p $(1)
-RM = rm -rf
+RM = rm -rf $(1)
 SEPARATOR = /
 
 # Commands
