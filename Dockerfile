@@ -45,6 +45,10 @@ COPY --from=builder /app /app
 # Add the venv to the PATH so we don't always need 'uv run'
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Add default env vars for serial config
+ENV SERIAL_BAUD=115200
+ENV SERIAL_TIMEOUT=1.0
+
 EXPOSE 5000
 
 # Use the venv's python directly for better performance/signals
