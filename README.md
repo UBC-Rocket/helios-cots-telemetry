@@ -40,28 +40,27 @@ uv sync
 
 ```bash
 # Basic usage - read from serial port
-python src/main.py -p /dev/ttyUSB0
+uv run src/main.py -p /dev/ttyUSB0
 
 # With custom baud rate (default: 115200)
-python src/main.py -p /dev/ttyACM0 -b 9600
+uv run src/main.py -p /dev/ttyACM0 -b 9600
 
 # Verbose mode (shows raw hex data)
-python src/main.py -p /dev/ttyUSB0 -v
+uv run src/main.py -p /dev/ttyUSB0 -v
 
 # With custom timeout (in seconds)
-python src/main.py -p /dev/ttyUSB0 -t 2.0
+uv run src/main.py -p /dev/ttyUSB0 -t 2.0
 
 # Log output to CSV file
-python src/main.py -p /dev/ttyUSB0 -o telemetry.csv
+uv run src/main.py -p /dev/ttyUSB0 -o telemetry.csv
 
 # Using environment variables
-SERIAL_PORT=/dev/ttyUSB0 SERIAL_BAUD=115200 python src/main.py
+SERIAL_PORT=/dev/ttyUSB0 SERIAL_BAUD=115200 uv run src/main.py
 ```
 
 ### Configuration via Environment Variables
 
 The decoder can be configured using environment variables (useful for Docker):
-- `SERIAL_PORT` - Serial device path (default: `/dev/radio`)
 - `SERIAL_BAUD` - Baud rate (default: `115200`)
 - `SERIAL_TIMEOUT` - Per-byte read timeout in seconds (default: `1.0`)
 - `CSV_OUTPUT_PATH` - Path for CSV log file (optional)
