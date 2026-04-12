@@ -94,12 +94,22 @@ def _verify_crc(decoded: bytes, debug: bool) -> tuple[bytes, bool]:
 
 def _decode_protobuf(payload: bytes, debug: bool) -> TelemetryPacket | None:
   try:
-    packet = TelemetryPacket()
-    packet.parse(payload)
+    packet = TelemetryPacket.FromString(payload)
+    
+    if debug:
+      print(f"[DEBUG] Protobuf decode successful, payload length: {len(payload)} bytes", file=sys.stderr)
+      print(f"[DEBUG] Parsed packet: counter={packet.counter}, timestamp_ms={packet.timestamp_ms}", file=sys.stderr)
+    
     return packet
   except DecodeError as exc:
     print(f"[ERROR] Protobuf decode failed: {exc}", file=sys.stderr)
     if debug:
       print("[DEBUG] Payload bytes that failed to decode:", file=sys.stderr)
+      print(hexdump(payload), file=sys.stderr)
+    return None
+  except Exception as exc:
+    print(f"[ERROR] Unexpected error during protobuf decode: {type(exc).__name__}: {exc}", file=sys.stderr)
+    if debug:
+      print("[DEBUG] Payload bytes:", file=sys.stderr)
       print(hexdump(payload), file=sys.stderr)
     return None
