@@ -18,6 +18,7 @@ COPY pyproject.toml uv.lock ./
 
 # Copy the SDK and install dependencies
 COPY helios-python-sdk/ ./helios-python-sdk/
+COPY falcon-protos/ ./falcon-protos/
 RUN uv sync --frozen --no-install-project
 
 # Copy source
