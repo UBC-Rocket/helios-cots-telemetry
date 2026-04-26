@@ -113,12 +113,16 @@ def run(args: argparse.Namespace) -> None:
           print_compact(packet_count, packet)
 
   except serial.SerialException as exc:
-    print(f"Serial error: {exc}", file=sys.stderr)
+    print(f"\n[ERROR] Serial error: {exc}", file=sys.stderr)
+    print("[ERROR] Failed to establish connection. Check port availability.", file=sys.stderr)
     sys.exit(1)
   except KeyboardInterrupt:
     print("\nExiting...")
     if args.output:
       print(f"CSV saved to {args.output}")
+  except Exception as exc:
+    print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+    sys.exit(1)
 
 
 # Used when CSV logging is disabled
