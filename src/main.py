@@ -15,6 +15,8 @@ Environment variables:
 import argparse
 import os
 import sys
+import threading
+import time
 
 import serial
 import helios_python_sdk as helios
@@ -80,13 +82,36 @@ def run(args: argparse.Namespace) -> None:
   """Main loop — read packets, decode them, log and display."""
   print(f"Opening {args.port} at {args.baud} baud...")
 
+  helios_sdk = helios.HeliosClient(
+    host="Helios", 
+    port=5000, 
+    timeout=None,
+    retry=999, 
+    retry_delay=5.0
+  )
+
+  # Track connection state
+  connected = {"status": False}
+
+  # Start connection in background thread
+  def connect_in_background():
+    try:
+      helios_sdk.connect()
+      connected["status"] = True
+      print("[Helios] Connected successfully")
+    except ConnectionError as e:
+      print(f"[Helios] Connection failed: {e}", file=sys.stderr)
+      connected["status"] = False
+  
+  connection_thread = threading.Thread(target=connect_in_background, daemon=True)
+  connection_thread.start()
+
   # CsvLogger is a no-op context manager substitute when logging is disabled
   logger_ctx = CsvLogger(args.output) if args.output else _NullLogger()
   serial_reader = SerialReader(args.port, args.baud, args.timeout)
-  helios_sdk = helios.HeliosClient(retry=999, retry_delay=5.0)
 
   try:
-    with serial_reader as reader, logger_ctx as logger, helios_sdk as client:
+    with serial_reader as reader, logger_ctx as logger:
       if args.output:
         print(f"Logging to {args.output}")
       print("Connected. Listening for packets...\n")
@@ -98,11 +123,17 @@ def run(args: argparse.Namespace) -> None:
         if args.debug:
           print(f"[{packet_count}] Raw COBS ({len(raw)} bytes): {raw.hex()}")
 
-        # TODO: Send packet to SDK here
-
         packet = decode_packet(raw, debug=args.debug)
         if packet is None:
           continue
+
+        # Send to SDK only if connected
+        if connected["status"]:
+          try:
+            helios_sdk.send(raw)
+          except Exception as e:
+            print(f"[Helios] Failed to send packet: {e}", file=sys.stderr)
+            connected["status"] = False
 
         if logger:
           logger.write(packet)

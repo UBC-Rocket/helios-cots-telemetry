@@ -14,8 +14,8 @@ import serial
 
 _MAX_PACKET_BYTES = 4096
 _COBS_DELIMITER = 0x00
-_RECONNECT_DELAY = 2.0  # Seconds to wait before retrying connection
-_RECONNECT_MAX_RETRIES = 10  # Max retries before giving up (0 = infinite)
+_RECONNECT_DELAY = 5.0  # Seconds to wait before retrying connection
+_RECONNECT_MAX_RETRIES = 0  # Max retries before giving up (0 = infinite)
 
 
 class SerialReader:
