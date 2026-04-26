@@ -16,10 +16,9 @@ import argparse
 import os
 import sys
 import threading
-import time
 
 import serial
-import helios_python_sdk as helios
+from helios import HeliosClient
 
 from decoder.csv_logger import CsvLogger
 from decoder.formatting import print_compact, print_verbose
@@ -82,7 +81,7 @@ def run(args: argparse.Namespace) -> None:
   """Main loop — read packets, decode them, log and display."""
   print(f"Opening {args.port} at {args.baud} baud...")
 
-  helios_sdk = helios.HeliosClient(
+  helios_sdk = HeliosClient(
     host="Helios", 
     port=5000, 
     timeout=None,
