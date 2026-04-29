@@ -13,9 +13,9 @@ Environment variables:
 """
 
 import argparse
+import asyncio
 import os
 import sys
-import threading
 
 import serial
 from helios import HeliosClient
@@ -77,33 +77,22 @@ def build_config() -> argparse.Namespace:
   return args
 
 
-def run(args: argparse.Namespace) -> None:
+async def main_loop(args: argparse.Namespace) -> None:
   """Main loop — read packets, decode them, log and display."""
   print(f"Opening {args.port} at {args.baud} baud...")
 
   helios_sdk = HeliosClient(
-    host="Helios", 
-    port=5000, 
-    timeout=None,
-    retry=999, 
-    retry_delay=5.0
+    core_address="Helios", 
+    core_port=5000,
+    node_uri="cots-telemetry-decoder",
   )
 
-  # Track connection state
-  connected = {"status": False}
-
-  # Start connection in background thread
-  def connect_in_background():
-    try:
-      helios_sdk.connect()
-      connected["status"] = True
-      print("[Helios] Connected successfully")
-    except ConnectionError as e:
-      print(f"[Helios] Connection failed: {e}", file=sys.stderr)
-      connected["status"] = False
-  
-  connection_thread = threading.Thread(target=connect_in_background, daemon=True)
-  connection_thread.start()
+  # Attempt initial connection
+  try:
+    await helios_sdk.connect()
+    print("[Helios] Connected successfully")
+  except Exception as e:
+    print(f"[Helios] Initial connection failed: {e}. Will retry in loop.", file=sys.stderr)
 
   # CsvLogger is a no-op context manager substitute when logging is disabled
   logger_ctx = CsvLogger(args.output) if args.output else _NullLogger()
@@ -116,7 +105,14 @@ def run(args: argparse.Namespace) -> None:
       print("Connected. Listening for packets...\n")
 
       packet_count = 0
-      for raw in reader.packets():
+
+      # Use a thread for the blocking serial generator to keep loop responsive
+      while True:
+        # Run the blocking 'read' in a thread to avoid freezing the event loop
+        raw = await asyncio.to_thread(next, reader.packets(), None)
+        if raw is None:
+          break
+        
         packet_count += 1
 
         if args.debug:
@@ -126,13 +122,20 @@ def run(args: argparse.Namespace) -> None:
         if packet is None:
           continue
 
-        # Send to SDK only if connected
-        if connected["status"]:
+        # Send to SDK asynchronously
+        try:
+          await helios_sdk.publish_event(
+            address="telemetry.packet",   # TODO: Confirm
+            event_type="TelemetryPacket", # TODO: Confirm
+            data=raw
+          )
+        except Exception as e:
+          print(f"[Helios] Send failed: {e}. Attempting reconnect...", file=sys.stderr)
           try:
-            helios_sdk.send(raw)
-          except Exception as e:
-            print(f"[Helios] Failed to send packet: {e}", file=sys.stderr)
-            connected["status"] = False
+            # Attempt to re-establish the session for the next packet
+            await helios_sdk.connect() 
+          except Exception as recon_err:
+            print(f"[Helios] Reconnect failed: {recon_err}", file=sys.stderr)
 
         if logger:
           logger.write(packet)
@@ -153,6 +156,9 @@ def run(args: argparse.Namespace) -> None:
   except Exception as exc:
     print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
     sys.exit(1)
+  finally:
+    # Clean up SDK connection
+    await helios_sdk.disconnect()
 
 
 # Used when CSV logging is disabled
@@ -162,4 +168,8 @@ class _NullLogger:
 
 
 if __name__ == "__main__":
-  run(build_config())
+  args = build_config()
+  try:
+    asyncio.run(main_loop(args))
+  except KeyboardInterrupt:
+    pass
