@@ -179,7 +179,7 @@ async def main_loop(args: argparse.Namespace) -> None:
 
       while True:
         raw = await asyncio.to_thread(next, reader.packets(), None)
-        if raw is None:
+        if raw is None or len(raw) < 15:   # drop malformed hardware frames
           break
 
         packet_count += 1
