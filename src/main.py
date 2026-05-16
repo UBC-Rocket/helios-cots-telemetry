@@ -180,7 +180,7 @@ async def main_loop(args: argparse.Namespace) -> None:
       while True:
         raw = await asyncio.to_thread(next, reader.packets(), None)
         if raw is None or len(raw) < 15:   # drop malformed hardware frames
-          break
+          continue
 
         packet_count += 1
 
@@ -196,7 +196,7 @@ async def main_loop(args: argparse.Namespace) -> None:
           try:
             await helios_sdk.publish_event(
               event_name="telemetry",
-              data=raw,
+              data=bytes(raw),
             )
           except Exception as e:
             print(f"[Helios] Send failed: {e}", file=sys.stderr)
