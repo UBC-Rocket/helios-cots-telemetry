@@ -39,6 +39,7 @@ def decode_packet(raw_data: bytes, debug: bool = False) -> TelemetryPacket | Non
       print(
         f"[ERROR] Packet too short ({len(decoded)} bytes), need at least 2 for CRC",
         file=sys.stderr,
+        flush=True,
       )
       return None
 
@@ -53,7 +54,7 @@ def _cobs_decode(raw_data: bytes, debug: bool) -> bytes | None:
   try:
     decoded = cobs.decode(raw_data)
   except cobs.DecodeError as exc:
-    print(f"[ERROR] COBS decode failed: {exc}", file=sys.stderr)
+    print(f"[ERROR] COBS decode failed: {exc}", file=sys.stderr, flush=True)
     print(f"[DEBUG] Raw bytes: {raw_data.hex()}", file=sys.stderr)
     return None
 
@@ -86,6 +87,7 @@ def _verify_crc(decoded: bytes, debug: bool) -> tuple[bytes, bool]:
     print(
       f"[WARNING] CRC mismatch — received: 0x{received:04X}, computed: 0x{computed:04X}",
       file=sys.stderr,
+      flush=True,
     )
     return payload, False
 
@@ -102,13 +104,13 @@ def _decode_protobuf(payload: bytes, debug: bool) -> TelemetryPacket | None:
     
     return packet
   except DecodeError as exc:
-    print(f"[ERROR] Protobuf decode failed: {exc}", file=sys.stderr)
+    print(f"[ERROR] Protobuf decode failed: {exc}", file=sys.stderr, flush=True)
     if debug:
       print("[DEBUG] Payload bytes that failed to decode:", file=sys.stderr)
       print(hexdump(payload), file=sys.stderr)
     return None
   except Exception as exc:
-    print(f"[ERROR] Unexpected error during protobuf decode: {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(f"[ERROR] Unexpected error during protobuf decode: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
     if debug:
       print("[DEBUG] Payload bytes:", file=sys.stderr)
       print(hexdump(payload), file=sys.stderr)

@@ -115,7 +115,7 @@ async def helios_manager(
       await sdk.connect()
       ready.set()
       label = "Connected" if attempt == 0 else "Reconnected"
-      print(f"[Helios] {label}")
+      print(f"[Helios] {label}", flush=True)
       attempt = 0
 
       # Stay here until the reader reports a dead connection or we shut down
@@ -125,7 +125,7 @@ async def helios_manager(
       if stop.is_set():
         break
 
-      print("[Helios] Connection lost — scheduling reconnect…", file=sys.stderr)
+      print("[Helios] Connection lost — scheduling reconnect…", file=sys.stderr, flush=True)
 
     except Exception as e:
       ready.clear()
@@ -134,6 +134,7 @@ async def helios_manager(
       print(
         f"[Helios] {label} failed: {e}. Retrying in {delay}s…",
         file=sys.stderr,
+        flush=True,
       )
       attempt += 1
       # Interruptible sleep — exits early if stop fires
@@ -143,12 +144,12 @@ async def helios_manager(
   ready.clear()
   with contextlib.suppress(Exception):
     await sdk.disconnect()
-  print("[Helios] Manager exited.")
+  print("[Helios] Manager exited.", flush=True)
 
 
 async def main_loop(args: argparse.Namespace) -> None:
   """Main loop — read packets, decode them, log and display."""
-  print(f"Opening {args.port} at {args.baud} baud…")
+  print(f"Opening {args.port} at {args.baud} baud…", flush=True)
 
   helios_sdk = HeliosClient(
     core_address="Helios",
@@ -172,8 +173,8 @@ async def main_loop(args: argparse.Namespace) -> None:
   try:
     with serial_reader as reader, logger_ctx as logger:
       if args.output:
-        print(f"Logging to {args.output}")
-      print("Connected. Listening for packets…\n")
+        print(f"Logging to {args.output}", flush=True)
+      print("Connected. Listening for packets…\n", flush=True)
 
       packet_count = 0
 
@@ -199,7 +200,7 @@ async def main_loop(args: argparse.Namespace) -> None:
               data=bytes(raw),
             )
           except Exception as e:
-            print(f"[Helios] Send failed: {e}", file=sys.stderr)
+            print(f"[Helios] Send failed: {e}", file=sys.stderr, flush=True)
             helios_ready.clear()
             connection_lost.set()   # wake the manager to reconnect
 
@@ -212,14 +213,14 @@ async def main_loop(args: argparse.Namespace) -> None:
           print_compact(packet_count, packet)
 
   except serial.SerialException as exc:
-    print(f"\n[ERROR] Serial error: {exc}", file=sys.stderr)
-    print("[ERROR] Failed to establish connection. Check port availability.", file=sys.stderr)
+    print(f"\n[ERROR] Serial error: {exc}", file=sys.stderr, flush=True)
+    print("[ERROR] Failed to establish connection. Check port availability.", file=sys.stderr, flush=True)
   except KeyboardInterrupt:
-    print("\nExiting…")
+    print("\nExiting…", flush=True)
     if args.output:
-        print(f"CSV saved to {args.output}")
+        print(f"CSV saved to {args.output}", flush=True)
   except Exception as exc:
-    print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
   finally:
     stop.set()                           # tell the manager to exit cleanly
     await manager_task                   # wait for it to disconnect and return

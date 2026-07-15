@@ -1,6 +1,7 @@
 {
   "volumes": [],
-  "ports": [
+  "devices": [
     "/dev/radio"
-  ]
+  ],
+  "ports": []
 }

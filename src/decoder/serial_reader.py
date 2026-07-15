@@ -54,7 +54,7 @@ class SerialReader:
     while True:
       try:
         self._ser = serial.Serial(self._port, self._baud, timeout=self._timeout)
-        print(f"[INFO] Connected to {self._port} at {self._baud} baud", file=sys.stderr)
+        print(f"[INFO] Connected to {self._port} at {self._baud} baud", file=sys.stderr, flush=True)
         return
       except serial.SerialException as exc:
         retries += 1
@@ -62,6 +62,7 @@ class SerialReader:
           print(
             f"[ERROR] Failed to open {self._port} after {retries} attempts",
             file=sys.stderr,
+            flush=True,
           )
           raise
         
@@ -69,6 +70,7 @@ class SerialReader:
           f"[WARNING] Cannot open {self._port} (attempt {retries}/{_RECONNECT_MAX_RETRIES if _RECONNECT_MAX_RETRIES > 0 else '∞'}). "
           f"Retrying in {_RECONNECT_DELAY}s...",
           file=sys.stderr,
+          flush=True,
         )
         time.sleep(_RECONNECT_DELAY)
 
@@ -94,6 +96,7 @@ class SerialReader:
             print(
               f"[WARNING] Timeout with {len(buffer)} bytes in buffer",
               file=sys.stderr,
+              flush=True,
             )
           return None
 
@@ -105,13 +108,14 @@ class SerialReader:
         buffer.append(byte[0])
 
         if len(buffer) > _MAX_PACKET_BYTES:
-          print("[ERROR] Buffer overflow, discarding packet", file=sys.stderr)
+          print("[ERROR] Buffer overflow, discarding packet", file=sys.stderr, flush=True)
           buffer.clear()
 
       except serial.SerialException as exc:
         print(
           f"[ERROR] Serial port disconnected: {exc}",
           file=sys.stderr,
+          flush=True,
         )
         raise
 
@@ -134,5 +138,6 @@ class SerialReader:
         print(
           f"[WARNING] Port disconnected. Attempting to reconnect...",
           file=sys.stderr,
+          flush=True,
         )
         self._open_port_with_retry()

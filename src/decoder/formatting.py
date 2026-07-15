@@ -47,7 +47,8 @@ def print_compact(index: int, packet: TelemetryPacket) -> None:
     f"Alt: {packet.kf_altitude:>8.2f}m | "
     f"Vel: {packet.kf_velocity:>7.2f}m/s | "
     f"{gps_info} | "
-    f"{' '.join(baro_parts)}"
+    f"{' '.join(baro_parts)}",
+    flush=True,
   )
 
 
@@ -87,4 +88,4 @@ def print_verbose(index: int, packet: TelemetryPacket) -> None:
   print(f"    gps_speed:       {packet.gps_speed:.2f}")
   print(f"    gps_sats:        {packet.gps_sats}")
   print(f"    gps_fix:         {packet.gps_fix}")
-  print()
+  print(flush=True)
