@@ -1,6 +1,8 @@
 [submodule "helios-python-sdk"]
 	path = helios-python-sdk
 	url = https://github.com/helios-data/helios-python-sdk
+  branch = main
 [submodule "falcon-protos"]
 	path = falcon-protos
 	url = https://github.com/UBC-Rocket/falcon-protos
+  branch = main
