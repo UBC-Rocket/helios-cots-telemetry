@@ -12,8 +12,11 @@ from generated import TelemetryPacket
 from decoder.formatting import hexdump
 
 
-# CRC-16-CCITT Kermit variant (polynomial 0x1021, init 0x0000, reflected)
-_crc16 = crcmod.predefined.mkCrcFun('kermit')
+# CRC-16-CCITT Kermit variant (polynomial 0x1021, init 0x0000, reflected).
+# Matches Zephyr's crc16_ccitt(0x0000, ...), which FALCON uses on both the
+# telemetry it sends and the commands it receives — hence shared with
+# decoder.uplink rather than kept private here.
+crc16 = crcmod.predefined.mkCrcFun('kermit')
 
 
 def decode_packet(raw_data: bytes, debug: bool = False) -> TelemetryPacket | None:
@@ -76,7 +79,7 @@ def _verify_crc(decoded: bytes, debug: bool) -> tuple[bytes, bool]:
   payload = decoded[:-2]
   crc_bytes = decoded[-2:]
   received = int.from_bytes(crc_bytes, byteorder='little')
-  computed = _crc16(payload)
+  computed = crc16(payload)
 
   if debug:
     print(f"[DEBUG] Payload ({len(payload)} bytes):", file=sys.stderr)

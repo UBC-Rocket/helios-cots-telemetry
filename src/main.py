@@ -10,6 +10,8 @@ Environment variables:
   SERIAL_BAUD        Baud rate                   (default: 115200)
   SERIAL_TIMEOUT     Per-byte read timeout (s)   (default: 1.0)
   CSV_OUTPUT_PATH    CSV log file path           (default: no logging)
+  COMMAND_ADDRESSES  Comma-separated Helios addresses to take ground
+                     commands from (default: COMMAND_ADDRESSES below)
 """
 
 import argparse
@@ -17,16 +19,41 @@ import asyncio
 import os
 import sys
 import contextlib
+from collections.abc import AsyncIterator
 
 import serial
 from helios import HeliosClient
+from helios.generated.helios.transport import Event
 
 from decoder.csv_logger import CsvLogger
 from decoder.formatting import print_compact, print_verbose
 from decoder.packet import decode_packet
 from decoder.serial_reader import SerialReader
+from decoder.uplink import FrameTooLargeError, describe_command, encode_command_frame
 
 RADIO_PORT = "/dev/radio"
+
+NODE_URI = "Helios.FALCON.SRAD_Telemetry"
+
+# Helios event carrying a serialized GroundCommand (falcon-protos).
+COMMAND_EVENT = "command"
+
+# Addresses we take ground commands from. The core routes an EventPublish on an
+# exact (address, event_name) match, so this has to be the address the publisher
+# puts on the message — not the publisher's own node URI:
+#
+#   * helios-mission-control (Helios.Services.Mission_Control) publishes its
+#     commands with override_address=NODE_URI, so they arrive here under our own
+#     address. That is the path that carries traffic today.
+#   * Mission_Control is subscribed as well, so commands still reach the radio
+#     if a publisher drops the override and posts on its own node URI instead.
+#
+# A subscription to an address the core doesn't know is rejected with an
+# EventError that the SDK only logs, so listing both costs nothing.
+COMMAND_ADDRESSES = (
+  NODE_URI,
+  "Helios.Services.Mission_Control",
+)
 
 def build_config() -> argparse.Namespace:
   """Parse CLI args, falling back to environment variables for each option."""
@@ -67,6 +94,15 @@ def build_config() -> argparse.Namespace:
     metavar="FILE",
     help="CSV log file path.  Env: CSV_OUTPUT_PATH",
   )
+  parser.add_argument(
+    "-c", "--command-address",
+    action="append",
+    metavar="ADDRESS",
+    help=(
+      "Helios address to take ground commands from; repeatable. "
+      "Env: COMMAND_ADDRESSES (comma-separated)"
+    ),
+  )
 
   args = parser.parse_args()
 
@@ -74,6 +110,12 @@ def build_config() -> argparse.Namespace:
     parser.error(
       "Serial port is required — pass -p/--port or set SERIAL_PORT"
     )
+
+  if not args.command_address:
+    from_env = os.environ.get("COMMAND_ADDRESSES", "")
+    args.command_address = [
+      a.strip() for a in from_env.split(",") if a.strip()
+    ] or list(COMMAND_ADDRESSES)
 
   return args
 
@@ -147,6 +189,112 @@ async def helios_manager(
   print("[Helios] Manager exited.", flush=True)
 
 
+async def _relay_commands(
+  events: AsyncIterator[Event],
+  address: str,
+  reader: SerialReader,
+) -> None:
+  """
+  Forward every command on one subscription to the radio.
+
+  The Helios payload is already a serialized GroundCommand, so it is framed and
+  relayed byte-for-byte — re-encoding it here would risk dropping fields this
+  build's protos don't know about yet.
+
+  One bad command must never take the relay down with it, so every failure is
+  logged and skipped: a dropped command can be re-sent by the operator, but a
+  dead relay silently ignores the rest of the flight.
+  """
+  async for event in events:
+    try:
+      payload = bytes(event.data or b"")
+      if not payload:
+        print(f"[Uplink] Empty command from {address}, ignored", file=sys.stderr, flush=True)
+        continue
+
+      summary = describe_command(payload)
+
+      try:
+        frame = encode_command_frame(payload)
+      except FrameTooLargeError as e:
+        print(f"[Uplink] Dropped {summary}: {e}", file=sys.stderr, flush=True)
+        continue
+
+      try:
+        await asyncio.to_thread(reader.write_frame, frame)
+      except Exception as e:
+        # A dead port is the reader's problem to reconnect; drop this command
+        # and keep the subscription alive so the next one still gets a chance.
+        print(f"[Uplink] Radio write failed for {summary}: {e}", file=sys.stderr, flush=True)
+        continue
+
+      print(f"[Uplink] Sent {summary} to RFD ({len(frame)} bytes)", flush=True)
+
+    except Exception as e:
+      print(
+        f"[Uplink] Unexpected error handling a command from {address}: "
+        f"{type(e).__name__}: {e}",
+        file=sys.stderr,
+        flush=True,
+      )
+
+
+async def command_uplink(
+  sdk: HeliosClient,
+  reader: SerialReader,
+  addresses: list[str],
+  ready: asyncio.Event,
+  connection_lost: asyncio.Event,
+  stop: asyncio.Event,
+) -> None:
+  """
+  Subscribe to ground commands and relay them out the radio port.
+
+  Shares helios_manager's lifecycle events rather than managing its own
+  connection: it waits for a live link, holds the subscriptions open for as
+  long as that link lasts, and re-subscribes after each reconnect — Helios
+  drops a client's subscriptions when it disconnects.
+  """
+  while not stop.is_set():
+    await _wait_first(ready, stop)
+    if stop.is_set():
+      break
+
+    tasks: list[asyncio.Task] = []
+    try:
+      async with contextlib.AsyncExitStack() as stack:
+        for address in addresses:
+          events = await stack.enter_async_context(
+            sdk.subscribe_event(address=address, event_name=COMMAND_EVENT)
+          )
+          tasks.append(asyncio.create_task(_relay_commands(events, address, reader)))
+
+        print(
+          f"[Uplink] Listening for '{COMMAND_EVENT}' on {', '.join(addresses)}",
+          flush=True,
+        )
+
+        # Hold the subscriptions open until the link drops or we shut down
+        await _wait_first(connection_lost, stop)
+
+    except Exception as e:
+      print(f"[Uplink] Subscription failed: {e}", file=sys.stderr, flush=True)
+    finally:
+      # Teardown must not fail: awaiting a relay that died re-raises its
+      # exception, which would otherwise escape and end the relay for good.
+      for task in tasks:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+          await task
+
+    # Give the manager a moment to reconnect before trying to re-subscribe
+    if not stop.is_set():
+      with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=1.0)
+
+  print("[Uplink] Relay exited.", flush=True)
+
+
 async def main_loop(args: argparse.Namespace) -> None:
   """Main loop — read packets, decode them, log and display."""
   print(f"Opening {args.port} at {args.baud} baud…", flush=True)
@@ -154,7 +302,7 @@ async def main_loop(args: argparse.Namespace) -> None:
   helios_sdk = HeliosClient(
     core_address="Helios",
     core_port=5000,
-    node_uri="Helios.FALCON.SRAD_Telemetry",
+    node_uri=NODE_URI,
   )
 
   # Shared coordination events
@@ -162,13 +310,19 @@ async def main_loop(args: argparse.Namespace) -> None:
   connection_lost   = asyncio.Event()   # reader sets this on send failure
   stop              = asyncio.Event()   # graceful shutdown signal
 
+  logger_ctx    = CsvLogger(args.output) if args.output else _NullLogger()
+  serial_reader = SerialReader(args.port, args.baud, args.timeout)
+
   # Helios runs in the background — the reader never waits on it
   manager_task = asyncio.create_task(
     helios_manager(helios_sdk, helios_ready, connection_lost, stop)
   )
-
-  logger_ctx    = CsvLogger(args.output) if args.output else _NullLogger()
-  serial_reader = SerialReader(args.port, args.baud, args.timeout)
+  uplink_task = asyncio.create_task(
+    command_uplink(
+      helios_sdk, serial_reader, args.command_address,
+      helios_ready, connection_lost, stop,
+    )
+  )
 
   try:
     with serial_reader as reader, logger_ctx as logger:
@@ -222,7 +376,9 @@ async def main_loop(args: argparse.Namespace) -> None:
   except Exception as exc:
     print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
   finally:
-    stop.set()                           # tell the manager to exit cleanly
+    stop.set()                           # tell the background tasks to exit cleanly
+    # Uplink first: it unsubscribes over a connection the manager still owns
+    await uplink_task
     await manager_task                   # wait for it to disconnect and return
 
 # Used when CSV logging is disabled
