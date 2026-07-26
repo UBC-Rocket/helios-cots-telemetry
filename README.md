@@ -43,7 +43,7 @@ uv sync
 # Basic usage - read from serial port
 uv run src/main.py -p /dev/ttyUSB0
 
-# With custom baud rate (default: 115200)
+# With custom baud rate (default: 57600)
 uv run src/main.py -p /dev/ttyACM0 -b 9600
 
 # Verbose mode (shows raw hex data)
@@ -56,7 +56,7 @@ uv run src/main.py -p /dev/ttyUSB0 -t 2.0
 uv run src/main.py -p /dev/ttyUSB0 -o telemetry.csv
 
 # Using environment variables
-SERIAL_PORT=/dev/ttyUSB0 SERIAL_BAUD=115200 uv run src/main.py
+SERIAL_PORT=/dev/ttyUSB0 SERIAL_BAUD=57600 uv run src/main.py
 
 # Take ground commands from a different Helios address (repeatable)
 uv run src/main.py -c Helios.Services.Mission_Control
@@ -65,7 +65,7 @@ uv run src/main.py -c Helios.Services.Mission_Control
 ### Configuration via Environment Variables
 
 The decoder can be configured using environment variables (useful for Docker):
-- `SERIAL_BAUD` - Baud rate (default: `115200`)
+- `SERIAL_BAUD` - Baud rate (default: `57600`)
 - `SERIAL_TIMEOUT` - Per-byte read timeout in seconds (default: `1.0`)
 - `CSV_OUTPUT_PATH` - Path for CSV log file (optional)
 - `COMMAND_ADDRESSES` - Comma-separated Helios addresses to take ground commands from (default: `Helios.FALCON.SRAD_Telemetry,Helios.Services.Mission_Control`)
