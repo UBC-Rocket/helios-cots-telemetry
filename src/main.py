@@ -7,7 +7,7 @@ without rebuilding the image.
 
 Environment variables:
   SERIAL_PORT        Serial device path          (default: RADIO_PORT)
-  SERIAL_BAUD        Baud rate                   (default: 115200)
+  SERIAL_BAUD        Baud rate                   (default: 57600)
   SERIAL_TIMEOUT     Per-byte read timeout (s)   (default: 1.0)
   CSV_OUTPUT_PATH    CSV log file path           (default: no logging)
   COMMAND_ADDRESSES  Comma-separated Helios addresses to take ground
@@ -69,7 +69,7 @@ def build_config() -> argparse.Namespace:
   parser.add_argument(
     "-b", "--baud",
     type=int,
-    default=int(os.environ.get("SERIAL_BAUD", 115200)),
+    default=int(os.environ.get("SERIAL_BAUD", 57600)),
     help="Baud rate.  Env: SERIAL_BAUD",
   )
   parser.add_argument(

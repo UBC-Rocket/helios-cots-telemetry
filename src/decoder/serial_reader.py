@@ -31,11 +31,11 @@ class SerialReader:
 
   Args:
     port:     Serial device path (e.g. /dev/ttyUSB0, COM3).
-    baud:     Baud rate. Defaults to 115200.
+    baud:     Baud rate. Defaults to 57600.
     timeout:  Per-byte read timeout in seconds. Defaults to 1.0.
   """
 
-  def __init__(self, port: str, baud: int = 115200, timeout: float = 1.0) -> None:
+  def __init__(self, port: str, baud: int = 57600, timeout: float = 1.0) -> None:
     self._port = port
     self._baud = baud
     self._timeout = timeout
