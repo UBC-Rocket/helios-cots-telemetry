@@ -1,11 +1,13 @@
 """
-Serial port reader with COBS framing.
+Serial port reader/writer with COBS framing.
 
 Owns the connection lifecycle and exposes a single blocking call —
-read_packet() — that returns one complete COBS frame at a time.
+read_packet() — that returns one complete COBS frame at a time, plus
+write_frame() for sending framed uplink commands back out the same port.
 """
 
 import sys
+import threading
 import time
 from typing import Generator
 
@@ -23,6 +25,10 @@ class SerialReader:
   Opens a serial port and yields raw COBS-encoded frames (without the
   0x00 delimiter) via read_packet().
 
+  The link is full duplex: write_frame() sends uplink frames on the same
+  port while read_packet() is blocked waiting on the downlink, so the two
+  are expected to run on different threads.
+
   Args:
     port:     Serial device path (e.g. /dev/ttyUSB0, COM3).
     baud:     Baud rate. Defaults to 115200.
@@ -34,6 +40,9 @@ class SerialReader:
     self._baud = baud
     self._timeout = timeout
     self._ser: serial.Serial | None = None
+    # Guards `_ser` so a write can't land on a handle the reader thread is
+    # swapping out mid-reconnect. Never held across a reconnect's sleep.
+    self._write_lock = threading.Lock()
 
 
   def __enter__(self) -> "SerialReader":
@@ -41,8 +50,9 @@ class SerialReader:
     return self
 
   def __exit__(self, *_) -> None:
-    if self._ser and self._ser.is_open:
-      self._ser.close()
+    with self._write_lock:
+      if self._ser and self._ser.is_open:
+        self._ser.close()
 
 
   def _open_port_with_retry(self) -> None:
@@ -53,7 +63,9 @@ class SerialReader:
     retries = 0
     while True:
       try:
-        self._ser = serial.Serial(self._port, self._baud, timeout=self._timeout)
+        ser = serial.Serial(self._port, self._baud, timeout=self._timeout)
+        with self._write_lock:
+          self._ser = ser
         print(f"[INFO] Connected to {self._port} at {self._baud} baud", file=sys.stderr, flush=True)
         return
       except serial.SerialException as exc:
@@ -118,6 +130,29 @@ class SerialReader:
           flush=True,
         )
         raise
+
+  def write_frame(self, frame: bytes) -> None:
+    """
+    Send one already-framed packet out the port and block until it is flushed.
+
+    Blocking is deliberate: the caller reports a command as uplinked only once
+    the bytes have actually left for the modem.
+
+    Args:
+      frame: Complete wire frame, delimiter included — see
+             decoder.uplink.encode_command_frame().
+
+    Raises:
+      SerialException: If the port is closed or the write fails.
+    """
+    with self._write_lock:
+      ser = self._ser
+      if ser is None or not ser.is_open:
+        raise serial.SerialException(f"{self._port} is not open")
+
+      ser.write(frame)
+      ser.flush()
+
 
   def packets(self) -> Generator[bytes, None, None]:
     """
