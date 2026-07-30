@@ -115,6 +115,49 @@ def describe_rfd_config(cfg: RfdConfig) -> str:
   return ", ".join(present) if present else "unset"
 
 
+def read_current_config(reader: SerialReader) -> RfdConfig | None:
+  """
+  Read every mapped S-register off the ground modem into an RfdConfig.
+
+  Nothing is written, so the modem is returned to data mode with ATO rather
+  than rebooted. Registers the modem won't answer for are left unset on the
+  returned message.
+
+  Blocking — call it from a worker thread. Holds the serial port exclusively,
+  costing a few seconds of downlink.
+
+  Returns:
+    The modem's current config, or None if it could not be read at all.
+  """
+  with reader.at_session() as port:
+    try:
+      _enter_at_mode(port)
+    except AtCommandError as exc:
+      print(f"[RFD] Could not read current config: {exc}", file=sys.stderr, flush=True)
+      return None
+
+    try:
+      values, raw_dump = _read_registers(port, [register for _, register in _REGISTERS])
+    finally:
+      # Always, even if the read blew up: a modem left in AT mode would
+      # swallow the entire downlink.
+      _leave_at_mode(port)
+
+  if not values:
+    print("[RFD] Could not read current config: modem answered no queries",
+          file=sys.stderr, flush=True)
+    return None
+
+  if raw_dump:
+    print(f"[RFD] ATI5 dump:\n{raw_dump}", flush=True)
+
+  return RfdConfig(**{
+    name: values[register]
+    for name, register in _REGISTERS
+    if register in values
+  })
+
+
 def apply_rfd_config(
   reader: SerialReader,
   cfg: RfdConfig,
@@ -201,6 +244,25 @@ def _command(port: AtPort, text: str) -> None:
   """Send one AT command and require an OK."""
   port.write_raw(f"{text}\r\n".encode())
   _expect_ok(port, text)
+
+
+def _leave_at_mode(port: AtPort) -> None:
+  """
+  Put the modem back into data mode after a read-only session.
+
+  ATO is instant and leaves the settings alone, but a modem stuck in AT mode
+  would swallow the entire downlink — so an unconfirmed ATO escalates to a
+  reboot, which always comes back in data mode.
+  """
+  try:
+    _command(port, "ATO")
+  except AtCommandError as exc:
+    print(
+      f"[RFD] ATO unconfirmed ({exc}) — rebooting to leave AT mode",
+      file=sys.stderr,
+      flush=True,
+    )
+    _reboot(port)
 
 
 def _reboot(port: AtPort) -> None:
