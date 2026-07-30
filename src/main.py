@@ -28,6 +28,7 @@ from helios.generated.helios.transport import Event
 from decoder.csv_logger import CsvLogger
 from decoder.formatting import print_compact, print_verbose
 from decoder.packet import decode_packet
+from decoder.rfd_config import apply_rfd_config, extract_rfd_config
 from decoder.serial_reader import SerialReader
 from decoder.uplink import FrameTooLargeError, describe_command, encode_command_frame
 
@@ -229,6 +230,23 @@ async def _relay_commands(
         continue
 
       print(f"[Uplink] Sent {summary} to RFD ({len(frame)} bytes)", flush=True)
+
+      # Now that the rocket has the command, bring the ground modem onto the
+      # same settings. Strictly after the send: reconfiguring first would move
+      # the ground modem off the frequency the command still had to go out on.
+      cfg = extract_rfd_config(payload)
+      if cfg is not None:
+        try:
+          await asyncio.to_thread(apply_rfd_config, reader, cfg)
+          print("[RFD] Ground modem reconfigured", flush=True)
+        except Exception as e:
+          # The modem was rebooted back onto its saved config, so the link is
+          # no worse off than before — log it and keep the relay alive.
+          print(
+            f"[RFD] Ground reconfig failed for {summary}: {e}",
+            file=sys.stderr,
+            flush=True,
+          )
 
     except Exception as e:
       print(

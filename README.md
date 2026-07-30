@@ -7,6 +7,7 @@ A Python-based telemetry decoder for COTS (Commercial Off-The-Shelf) satellite s
 - **Protocol Buffer Support**: Message serialization and deserialization using Protocol Buffers
 - **Serial Communication**: Read and decode telemetry data from serial interfaces
 - **Command Uplink**: Relay ground commands from Helios out the RFD to FALCON
+- **Ground RFD Reconfiguration**: Apply an `rfd_config` command to the local modem over AT, after uplinking it
 - **Multiple Output Formats**: CSV logging and structured data formatting
 - **COBS Encoding**: Support for Consistent Overhead Byte Stuffing
 - **CRC Validation**: Data integrity checking with CRC module
@@ -102,10 +103,52 @@ core rejects it with an `EventError` that the SDK just logs.
 
 ### RFD reconfiguration
 
-A `GroundCommand` carrying `rfd_config` is uplinked like any other command, and FALCON
-applies it to the **rocket-side** modem. This decoder does **not** currently reprogram
-the ground-side RFD, so an `rfd_config` command will drop the link until the ground
-modem is changed to match by other means.
+A `GroundCommand` carrying `rfd_config` is uplinked like any other command — FALCON applies it
+to the **rocket-side** modem — and then the decoder applies the same settings to the
+**ground-side** modem, so both ends move together instead of the link going deaf.
+
+Order matters: the frame goes out first, and only once it has flushed does the ground modem get
+touched. Reconfiguring first would move the ground modem off the settings the command still had
+to be transmitted on.
+
+The ground modem is driven over the same serial port using the SiK escape sequence:
+
+```
+<1s silence>  +++  <1s silence>  ->  OK    enter AT mode
+ATI5 / ATS<n>?                             read and log the current config
+ATS<n>=<value>                             set each register the command sets
+AT&W                                       commit to EEPROM
+ATZ                                        reboot on the new config
+```
+
+Fields map straight onto S-registers, with no unit conversion. Only the fields the command
+actually sets are written; the rest are left alone.
+
+| `RfdConfig` field | register |
+| --- | --- |
+| `air_speed_kbps` | `S2` |
+| `net_id` | `S3` |
+| `tx_power_dbm` | `S4` |
+| `min_freq_khz` | `S8` |
+| `max_freq_khz` | `S9` |
+| `num_channels` | `S10` |
+
+AT mode is a request/response dialogue, so it cannot share the line with the downlink. For the
+duration of the sequence — roughly 5 seconds — the reader stands down and any telemetry that
+arrives is lost. Uplink writes are held off too, so a command arriving in the meantime waits
+rather than interleaving into the dialogue.
+
+Before writing anything, the current values of the registers about to change are read back and
+logged, along with the full `ATI5` dump, and kept in memory (`rfd_config.last_snapshot()`) so the
+old config is on hand if the rocket never comes back on the new one. Nothing reverts
+automatically today. The snapshot has to happen before `AT&W`, since that erases the old values
+from EEPROM.
+
+If the sequence fails — no `OK` to `+++`, or a register the modem rejects — the whole thing is
+retried once. Registers set before a failure are volatile until `AT&W`, so each failed attempt
+ends in an `ATZ` that reboots the modem back onto its saved config, leaving the link exactly as
+it was. A final failure is logged to stderr and the relay carries on; nothing is published back
+to Helios.
 
 ### Docker
 
