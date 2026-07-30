@@ -28,9 +28,15 @@ from helios.generated.helios.transport import Event
 from decoder.csv_logger import CsvLogger
 from decoder.formatting import print_compact, print_verbose
 from decoder.packet import decode_packet
-from decoder.rfd_config import apply_rfd_config, extract_rfd_config
+from decoder.rfd_config import (
+  apply_rfd_config,
+  describe_rfd_config,
+  extract_rfd_config,
+  read_current_config,
+)
 from decoder.serial_reader import SerialReader
 from decoder.uplink import FrameTooLargeError, describe_command, encode_command_frame
+from generated import RfdConfig
 
 RADIO_PORT = "/dev/radio"
 
@@ -38,6 +44,12 @@ NODE_URI = "Helios.FALCON.SRAD_Telemetry"
 
 # Helios event carrying a serialized GroundCommand (falcon-protos).
 COMMAND_EVENT = "command"
+
+# Helios event carrying a bare serialized RfdConfig — no GroundCommand wrapper —
+# describing what the *ground* modem is currently set to. Published once at
+# startup and again after every successful reconfiguration, so a subscriber can
+# treat the latest one as the current state of the ground station.
+RFD_CONFIG_EVENT = "current_rfd_config"
 
 # Addresses we take ground commands from. The core routes an EventPublish on an
 # exact (address, event_name) match, so this has to be the address the publisher
@@ -190,10 +202,82 @@ async def helios_manager(
   print("[Helios] Manager exited.", flush=True)
 
 
+async def _publish_rfd_config(
+  sdk: HeliosClient,
+  cfg: RfdConfig,
+  ready: asyncio.Event,
+) -> None:
+  """
+  Publish the ground modem's current settings as a bare RfdConfig.
+
+  The payload is the RfdConfig on its own — deliberately not wrapped in a
+  GroundCommand, since this is the ground station reporting state rather than
+  an operator issuing an order.
+
+  Never raises: this is a status report, and losing one must not take down the
+  relay or the startup path that called it.
+  """
+  if not ready.is_set():
+    print(
+      f"[RFD] Helios down — '{RFD_CONFIG_EVENT}' not published",
+      file=sys.stderr,
+      flush=True,
+    )
+    return
+
+  try:
+    await sdk.publish_event(event_name=RFD_CONFIG_EVENT, data=bytes(cfg))
+    print(
+      f"[RFD] Published '{RFD_CONFIG_EVENT}': {describe_rfd_config(cfg)}",
+      flush=True,
+    )
+  except Exception as e:
+    print(
+      f"[RFD] Failed to publish '{RFD_CONFIG_EVENT}': {e}",
+      file=sys.stderr,
+      flush=True,
+    )
+
+
+async def announce_rfd_config(
+  sdk: HeliosClient,
+  reader: SerialReader,
+  ready: asyncio.Event,
+  stop: asyncio.Event,
+) -> None:
+  """
+  Read the ground modem once at startup and publish what it is set to.
+
+  The read happens immediately rather than after Helios connects, so the few
+  seconds of downlink it costs land at startup with nothing in the air — a
+  Helios link that only comes up mid-flight would otherwise trigger the
+  blackout at the worst possible moment. The reading is then held until there
+  is somewhere to send it.
+  """
+  try:
+    cfg = await asyncio.to_thread(read_current_config, reader)
+  except Exception as e:
+    print(f"[RFD] Startup config read failed: {e}", file=sys.stderr, flush=True)
+    return
+
+  if cfg is None:
+    return
+
+  print(f"[RFD] Ground modem is set to: {describe_rfd_config(cfg)}", flush=True)
+
+  await _wait_first(ready, stop)
+  if stop.is_set():
+    return
+
+  await _publish_rfd_config(sdk, cfg, ready)
+
+
 async def _relay_commands(
   events: AsyncIterator[Event],
   address: str,
   reader: SerialReader,
+  sdk: HeliosClient,
+  ready: asyncio.Event,
 ) -> None:
   """
   Forward every command on one subscription to the radio.
@@ -247,6 +331,15 @@ async def _relay_commands(
             file=sys.stderr,
             flush=True,
           )
+          continue
+
+        # Announce the new state by reading it back off the modem rather than
+        # echoing what we asked for: that confirms AT&W actually persisted, and
+        # fills in the registers this command left alone. Costs a second AT
+        # session, on top of an operation that already interrupts the downlink.
+        applied = await asyncio.to_thread(read_current_config, reader)
+        if applied is not None:
+          await _publish_rfd_config(sdk, applied, ready)
 
     except Exception as e:
       print(
@@ -285,7 +378,9 @@ async def command_uplink(
           events = await stack.enter_async_context(
             sdk.subscribe_event(address=address, event_name=COMMAND_EVENT)
           )
-          tasks.append(asyncio.create_task(_relay_commands(events, address, reader)))
+          tasks.append(
+            asyncio.create_task(_relay_commands(events, address, reader, sdk, ready))
+          )
 
         print(
           f"[Uplink] Listening for '{COMMAND_EVENT}' on {', '.join(addresses)}",
@@ -342,10 +437,18 @@ async def main_loop(args: argparse.Namespace) -> None:
     )
   )
 
+  announce_task: asyncio.Task | None = None
+
   try:
     with serial_reader as reader, logger_ctx as logger:
       if args.output:
         print(f"Logging to {args.output}", flush=True)
+
+      # Only startable here — reading the modem needs the port already open.
+      announce_task = asyncio.create_task(
+        announce_rfd_config(helios_sdk, reader, helios_ready, stop)
+      )
+
       print("Connected. Listening for packets…\n", flush=True)
 
       packet_count = 0
@@ -395,6 +498,12 @@ async def main_loop(args: argparse.Namespace) -> None:
     print(f"\n[ERROR] Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
   finally:
     stop.set()                           # tell the background tasks to exit cleanly
+    # May still be blocked reading the modem, or waiting for a link that will
+    # never come — either way it must not hold up shutdown.
+    if announce_task is not None:
+      announce_task.cancel()
+      with contextlib.suppress(asyncio.CancelledError, Exception):
+        await announce_task
     # Uplink first: it unsubscribes over a connection the manager still owns
     await uplink_task
     await manager_task                   # wait for it to disconnect and return

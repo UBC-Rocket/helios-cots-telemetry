@@ -7,7 +7,7 @@ A Python-based telemetry decoder for COTS (Commercial Off-The-Shelf) satellite s
 - **Protocol Buffer Support**: Message serialization and deserialization using Protocol Buffers
 - **Serial Communication**: Read and decode telemetry data from serial interfaces
 - **Command Uplink**: Relay ground commands from Helios out the RFD to FALCON
-- **Ground RFD Reconfiguration**: Apply an `rfd_config` command to the local modem over AT, after uplinking it
+- **Ground RFD Reconfiguration**: Apply an `rfd_config` command to the local modem over AT, after uplinking it, and report the result to Helios
 - **Multiple Output Formats**: CSV logging and structured data formatting
 - **COBS Encoding**: Support for Consistent Overhead Byte Stuffing
 - **CRC Validation**: Data integrity checking with CRC module
@@ -147,8 +147,31 @@ from EEPROM.
 If the sequence fails — no `OK` to `+++`, or a register the modem rejects — the whole thing is
 retried once. Registers set before a failure are volatile until `AT&W`, so each failed attempt
 ends in an `ATZ` that reboots the modem back onto its saved config, leaving the link exactly as
-it was. A final failure is logged to stderr and the relay carries on; nothing is published back
-to Helios.
+it was. A final failure is logged to stderr and nothing is published; the relay carries on.
+
+### Reporting the ground config: `current_rfd_config`
+
+The node publishes a `current_rfd_config` event describing what the **ground** modem is set to.
+The payload is a bare serialized `RfdConfig` — deliberately *not* wrapped in a `GroundCommand`,
+since this is the ground station reporting state rather than an operator issuing an order. A
+subscriber can treat the most recent one as current.
+
+It is published twice over a normal run:
+
+- **At startup**, from a read of all six registers. The read happens as soon as the port opens,
+  before waiting on Helios, so its few seconds of downlink cost land while nothing is flying —
+  a Helios link that only came up mid-flight would otherwise trigger the blackout at the worst
+  moment. The reading is then held until there is somewhere to send it. If Helios never
+  connects, nothing is published.
+- **After every successful reconfiguration**, from a second read taken once the modem has
+  rebooted. Reading back rather than echoing the requested values confirms `AT&W` actually
+  persisted, and fills in the registers the command left alone. This costs another AT session on
+  top of one that already interrupted the downlink.
+
+Reads are best-effort per register: one the modem won't answer for is logged and left unset on
+the message rather than failing the whole thing. Since nothing is written, these sessions exit
+with `ATO` rather than a reboot — and an `ATO` the modem doesn't confirm escalates to `ATZ`,
+because a modem stranded in AT mode would swallow the entire downlink.
 
 ### Docker
 
