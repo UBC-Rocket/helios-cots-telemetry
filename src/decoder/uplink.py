@@ -13,6 +13,7 @@ frames the rocket sends the other way.
 from cobs import cobs
 
 from decoder.packet import crc16
+from decoder.rfd_config import describe_rfd_config
 from generated import GroundCommand
 
 
@@ -87,15 +88,7 @@ def describe_command(payload: bytes) -> str:
     )
     detail = f"camera({fields})"
   elif cmd.rfd_config is not None:
-    fields = _named_fields(
-      min_freq_khz=cmd.rfd_config.min_freq_khz,
-      max_freq_khz=cmd.rfd_config.max_freq_khz,
-      net_id=cmd.rfd_config.net_id,
-      tx_power_dbm=cmd.rfd_config.tx_power_dbm,
-      air_speed_kbps=cmd.rfd_config.air_speed_kbps,
-      num_channels=cmd.rfd_config.num_channels,
-    )
-    detail = f"rfd_config({fields})"
+    detail = f"rfd_config({describe_rfd_config(cmd.rfd_config)})"
   else:
     detail = "no payload"
 
