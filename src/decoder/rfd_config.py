@@ -250,19 +250,17 @@ def _leave_at_mode(port: AtPort) -> None:
   """
   Put the modem back into data mode after a read-only session.
 
-  ATO is instant and leaves the settings alone, but a modem stuck in AT mode
-  would swallow the entire downlink — so an unconfirmed ATO escalates to a
-  reboot, which always comes back in data mode.
+  Like ATZ, ATO answers nothing: the modem is already transparent by the time
+  a reply would land, so an OK would go out over the air instead of coming
+  back here. Waiting for one and then "escalating" to ATZ is actively harmful
+  — the ATZ is written into the data stream and lands in FALCON's receive
+  buffer, where it corrupts the next command frame.
+
+  Firmware that does answer is handled too: the stray OK is flushed below.
   """
-  try:
-    _command(port, "ATO")
-  except AtCommandError as exc:
-    print(
-      f"[RFD] ATO unconfirmed ({exc}) — rebooting to leave AT mode",
-      file=sys.stderr,
-      flush=True,
-    )
-    _reboot(port)
+  port.write_raw(b"ATO\r\n")
+  time.sleep(_GUARD_SECONDS)
+  port.reset_input_buffer()
 
 
 def _reboot(port: AtPort) -> None:

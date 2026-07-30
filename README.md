@@ -170,8 +170,13 @@ It is published twice over a normal run:
 
 Reads are best-effort per register: one the modem won't answer for is logged and left unset on
 the message rather than failing the whole thing. Since nothing is written, these sessions exit
-with `ATO` rather than a reboot — and an `ATO` the modem doesn't confirm escalates to `ATZ`,
-because a modem stranded in AT mode would swallow the entire downlink.
+with `ATO` rather than a reboot.
+
+Note that `ATO` answers nothing — like `ATZ`, the modem is already transparent by the time a
+reply would land, so an `OK` would go out over the air rather than come back to the host. Do not
+wait for one and fall back to `ATZ` on the timeout: by then the modem is in data mode, so the
+`ATZ` is transmitted as payload, parks at the front of FALCON's receive buffer, and corrupts the
+next command frame into a CRC failure.
 
 ### Docker
 
