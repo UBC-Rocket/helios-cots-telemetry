@@ -21,8 +21,16 @@ escape sequence:
 AT mode is a request/response dialogue and cannot share the line with the
 downlink, so the whole sequence happens inside a SerialReader.at_session(),
 which stands the reader down for its duration (~5s of lost telemetry).
+
+One consequence of driving the modem over the live radio port: the escape
+sequence reaches the air. The modem forwards "+++" as payload before it acts
+on it, so every session puts three '+' into the rocket's receive stream, and
+a reconfig runs two sessions (apply, then read-back). The rocket splits that
+stream on 0x00 and has no terminator to close the debris off, so it lingers
+and corrupts the *next* command. _flush_far_end sends the missing delimiter.
 """
 
+import contextlib
 import re
 import sys
 import time
@@ -60,6 +68,18 @@ _REGISTERS: tuple[tuple[str, int], ...] = (
 # by '?' rather than end-of-line. The trailing class has to include \r: the
 # modem sends CRLF, and $ only matches ahead of the \n.
 _VALUE_RE = re.compile(r"(?:^|\D)(\d+)[ \t\r]*$", re.MULTILINE)
+
+# OK/ERROR have to be matched as line-terminal tokens, not bare substrings.
+# Until the modem escapes, the buffer still holds *binary* downlink telemetry,
+# and the bytes 0x4F 0x4B ("OK") turn up in COBS-encoded protobuf by chance
+# roughly once every few hundred frames — at 2 Hz that is often enough to
+# matter. A false positive is silent and severe: _enter_at_mode returns
+# success while the modem is still transparent, so every ATS/AT&W/ATZ that
+# follows is transmitted over the air instead of executed.
+#
+# The leading class also absorbs the multipoint node-id prefix ("[2] OK").
+_OK_RE = re.compile(r"(?:^|[\s\]])OK[ \t\r]*$", re.MULTILINE)
+_ERROR_RE = re.compile(r"(?:^|[\s\]])ERROR\b", re.MULTILINE)
 
 
 class AtCommandError(RuntimeError):
@@ -220,6 +240,11 @@ def apply_rfd_config(
         # escape landed — otherwise ATZ would go out over the air as garbage.
         if in_at_mode:
           _reboot(port)
+        else:
+          # The escape itself failed, so the modem never left data mode and
+          # those '+' went out as payload. This is the path that stranded
+          # "++++++" at the far end, since a retry leaks another three.
+          _flush_far_end(port)
 
         if attempt == attempts:
           raise
@@ -232,12 +257,42 @@ def apply_rfd_config(
 
 
 def _enter_at_mode(port: AtPort) -> None:
-  """Escape into AT command mode, guard times included."""
+  """
+  Escape into AT command mode, guard times included.
+
+  Note the escape reaches the air. Confirmed against the rocket 2026-07-30:
+  the modem forwards "+++" as payload before it acts on it, so every session
+  puts three '+' into the far end's receive stream whether the escape lands
+  or not. Nothing here can prevent that — see _flush_far_end for the cleanup.
+  """
   port.reset_input_buffer()
   time.sleep(_GUARD_SECONDS)
   port.write_raw(b"+++")
   time.sleep(_GUARD_SECONDS)
   _expect_ok(port, "+++")
+
+
+def _flush_far_end(port: AtPort) -> None:
+  """
+  Terminate escape characters that leaked over the air, with a lone 0x00.
+
+  FALCON's receiver splits the radio stream on 0x00 and waits indefinitely
+  otherwise, so the '+' characters _enter_at_mode puts on the air are not
+  discarded — they sit in its buffer and are prepended to the *next* uplink
+  frame, breaking that command's COBS decode. Two sessions per reconfig
+  (apply, then read-back) is what produced the "++++++" seen in front of a
+  command frame, so each reconfig was corrupting the one after it.
+
+  A single delimiter closes the debris off as its own junk message: the far
+  end discards one undecodable frame and resumes on a clean boundary. When
+  nothing leaked it costs nothing, because a delimiter with an empty buffer
+  behind it is a no-op at both ends.
+
+  Only meaningful once the modem is transparent again — call it after ATZ or
+  ATO, never inside command mode, where it would just be an empty AT line.
+  """
+  with contextlib.suppress(Exception):
+    port.write_raw(b"\x00")
 
 
 def _command(port: AtPort, text: str) -> None:
@@ -261,6 +316,7 @@ def _leave_at_mode(port: AtPort) -> None:
   port.write_raw(b"ATO\r\n")
   time.sleep(_GUARD_SECONDS)
   port.reset_input_buffer()
+  _flush_far_end(port)
 
 
 def _reboot(port: AtPort) -> None:
@@ -273,6 +329,7 @@ def _reboot(port: AtPort) -> None:
   port.write_raw(b"ATZ\r\n")
   time.sleep(_REBOOT_SECONDS)
   port.reset_input_buffer()
+  _flush_far_end(port)
 
 
 def _capture_snapshot(port: AtPort, registers: list[int]) -> None:
@@ -330,11 +387,11 @@ def _read_registers(
   values: dict[int, int] = {}
   for register in registers:
     port.write_raw(f"ATS{register}?\r\n".encode())
-    reply = _read_reply(port, _RESPONSE_TIMEOUT, stop_on=("OK", "ERROR"))
+    reply = _read_reply(port, _RESPONSE_TIMEOUT, stop_re=(_OK_RE, _ERROR_RE))
 
     # Last match, not first: the value follows the modem's echo of the query.
     found = _VALUE_RE.findall(reply.replace("OK", ""))
-    if "ERROR" in reply or not found:
+    if _ERROR_RE.search(reply) or not found:
       print(
         f"[RFD] WARNING: no value read for S{register}: {reply.strip()!r}",
         file=sys.stderr,
@@ -350,28 +407,34 @@ def _expect_ok(port: AtPort, context: str) -> None:
   """
   Read until the modem answers OK, or raise.
 
-  Scans the accumulated text rather than matching whole lines: SiK echoes what
-  it is sent, and downlink bytes already in flight when the port went quiet can
-  still be sitting in front of the reply.
+  Scans the accumulated text rather than requiring the reply to stand alone:
+  SiK echoes what it is sent, and downlink bytes already in flight when the
+  port went quiet can still be sitting in front of it. The match is anchored
+  to end-of-line all the same — see _OK_RE for why a substring test is not
+  safe against a buffer that still contains binary telemetry.
   """
-  reply = _read_reply(port, _RESPONSE_TIMEOUT, stop_on=("OK", "ERROR"))
+  reply = _read_reply(port, _RESPONSE_TIMEOUT, stop_re=(_OK_RE, _ERROR_RE))
 
-  if "ERROR" in reply:
+  if _ERROR_RE.search(reply):
     raise AtCommandError(f"{context} rejected by modem: {reply.strip()!r}")
-  if "OK" not in reply:
+  if not _OK_RE.search(reply):
     raise AtCommandError(f"no response to {context} within {_RESPONSE_TIMEOUT}s")
 
 
 def _read_reply(
   port: AtPort,
   timeout: float,
-  stop_on: tuple[str, ...] = (),
+  stop_re: tuple[re.Pattern[str], ...] = (),
 ) -> str:
   """
-  Accumulate bytes until one of `stop_on` shows up or the deadline passes.
+  Accumulate bytes until one of `stop_re` matches or the deadline passes.
 
-  With no `stop_on` it always runs the full timeout, which is what multi-line
+  With no `stop_re` it always runs the full timeout, which is what multi-line
   replies like ATI5 need — there is no terminator to watch for.
+
+  The stop condition uses the same patterns the caller will judge the reply
+  by. If it stopped on a looser test, a false match would end the read early
+  and the caller would then reject what it was handed.
   """
   deadline = time.monotonic() + timeout
   buffer = bytearray()
@@ -379,7 +442,7 @@ def _read_reply(
   while time.monotonic() < deadline:
     buffer.extend(port.read_available())
     text = buffer.decode("ascii", errors="replace")
-    if any(token in text for token in stop_on):
+    if any(pattern.search(text) for pattern in stop_re):
       return text
 
   return buffer.decode("ascii", errors="replace")
